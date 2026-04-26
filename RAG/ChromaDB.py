@@ -8,7 +8,7 @@ import chromadb
 class ChromaVectorStore:
     def __init__(
             self,
-            persist_dir: str = "data/chroma",   # ChromaDB 数据保存在本地哪个文件夹里
+            persist_dir: str = "data/chroma",   # ChromaDB 数据保存在哪个文件夹里?
             collection_name: str = "course_materials",  # 数据库里的“表名”。
             ) -> None:
         
@@ -65,11 +65,11 @@ class ChromaVectorStore:
             "filename": "week1.pdf"
             }
 
-            summary    -> 帮助快速理解这一块讲什么
-            key_points -> 帮助抓重点
+            summary    -> 帮助快速理解这一块讲什么?
+            key_points -> 帮助抓重点?
             formulas   -> 回答计算题、数学推导题
-            rules      -> 回答判断题、选择题、适用场景题
-            methods    -> 回答“怎么做”的步骤题
+            rules      -> 回答判断题、选择题、适用场景题?
+            methods    -> 回答“怎么做”的步骤题?
             examples   -> 帮助 Tutor Agent 举例解释
         """
 
@@ -104,7 +104,7 @@ class ChromaVectorStore:
         )
     
     def _build_document_text(self, block):
-        # 获取block信息 为 存进DB 做提取
+        # 获取block信息 一起存进DB 做提取?
         key_points = block.get("key_points", [])
         concepts = block.get("concepts", [])
         formulas = block.get("formulas", [])
@@ -158,7 +158,7 @@ class ChromaVectorStore:
         self.collection.delete(ids=block_id)
 
     def get_all_blocks(self):
-        # 一键获取 DB 全部内容
+        # 一键获取DB 全部内容
         return self.collection.get()
 
     def remove_all(self):

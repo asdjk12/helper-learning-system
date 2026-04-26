@@ -10,10 +10,14 @@ except ImportError:
     from prompt import _repair_llm_json, yield_summarise
 
 try:
+    from ..llm import model_init
+except ImportError:
+    from llm import model_init
+
+try:
     from .ChromaDB import ChromaVectorStore
 except ImportError:
     from ChromaDB import ChromaVectorStore
-
 
 try:
     from pypdf import PdfReader
@@ -106,8 +110,7 @@ def _validate_blocks_schema(data, group):
 
 def download_pdf_to_temp(file_url, temp_dir):
     """
-    下载pdf至临时文件
-    """
+    下载pdf至临时文件?    """
     if not file_url:
         raise ValueError("未收到file_url")
 
@@ -120,7 +123,7 @@ def download_pdf_to_temp(file_url, temp_dir):
         filename = Path(unquote(parsed_url.path)).name or "uploaded.pdf"
         temp_pdf_path = temp_dir / filename
 
-        # 读取url并查看状态
+        # 读取url并查看状态?        
         response = requests.get(file_url, stream=True, timeout=30)
         response.raise_for_status()
 
@@ -161,9 +164,7 @@ def read_pdf_pages(temp_pdf_path):
 def group_pages(pages, max_tokens=1800):
     """
     在将页面发送给LLM之前，请先将它们分组。
-
-    这样可以保持源页码清晰，避免出现一大堆提示信息。
-    """
+    这样可以保持源页码清晰，避免出现一大堆提示信息。    """
     if max_tokens <= 0:
         raise ValueError("group_size须为正整数")
 
@@ -205,104 +206,14 @@ def group_pages(pages, max_tokens=1800):
         }
 
 
-def summarize_group_with_llm(group, model=None):
-    """
-    Summarize one page group into the knowledge-block JSON format.
-    Set LLM_MODEL in the environment or pass model="..." directly.
-    """
-    from openai import OpenAI
-
-    # model detail 
-    model = model or os.getenv("MODELSCOPE_MODEL_ID")
-    if not model:
-        raise ValueError("missing MODELSCOPE_MODEL_ID")
-    
-    api_key = os.getenv("MODELSCOPE_SDK_TOKEN")
-    base_url = os.getenv("MODELSCOPE_BASE_URL")
-
-    if not api_key:
-        raise ValueError("missing MODELSCOPE_SDK_TOKEN")
-
-    if not base_url:
-        raise ValueError("missing MODELSCOPE_BASE_URL")
-
-    client = OpenAI(
-        api_key=os.getenv("MODELSCOPE_SDK_TOKEN"),
-        base_url=os.getenv("MODELSCOPE_BASE_URL"),
-    )
-
-    prompt = yield_summarise(group= group)
-
-    # openAI chat 格式
-    response = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        response_format={"type": "json_object"},
-        temperature=0,
-    )
-    # print(response)     # debug
-
-    raw_content = response.choices[0].message.content       # llm回答
-
-
-    try:
-        # 尝试读取
-        data = _parse_llm_json(raw_content)
-        blocks = _validate_blocks_schema(data, group)
-
-
-    except ValueError as error:
-        # 将错误json内容，再强制生为json format
-        repaired_content = _repair_llm_json(
-            client=client,
-            model=model,
-            broken_content=raw_content,
-            error=error,
-        )
-        repaired_data = _parse_llm_json(repaired_content)
-        blocks = _validate_blocks_schema(repaired_data, group)
-
-    # 对提取到的block做提取，为了保存
-    for index, block in enumerate(blocks):
-        block.setdefault(
-            "block_id",
-            f"{Path(group['filename']).stem}:pages:{group['source_pages']}:block:{index}",
-        )
-        block["source_pages"] = group["source_pages"]
-        block["filename"] = group["filename"]
-
-    return blocks
-
-
 def summarize_group_with_llm(group, model=None, max_attempts=3):
     """
     Summarize one page group into the knowledge-block JSON format.
     Retry generation up to max_attempts times, with one repair attempt
     inside each generation attempt.
     """
-    from openai import OpenAI
 
-    # 模型详情配置
-    model = model or os.getenv("MODELSCOPE_MODEL_ID")
-    if not model:
-        raise ValueError("missing MODELSCOPE_MODEL_ID")
-
-    api_key = os.getenv("MODELSCOPE_SDK_TOKEN")
-    base_url = os.getenv("MODELSCOPE_BASE_URL")
-
-    if not api_key:
-        raise ValueError("missing MODELSCOPE_SDK_TOKEN")
-
-    if not base_url:
-        raise ValueError("missing MODELSCOPE_BASE_URL")
-
-    if max_attempts <= 0:
-        raise ValueError("max_attempts must be a positive integer")
-
-    client = OpenAI(
-        api_key=api_key,
-        base_url=base_url,
-    )
+    client,model = model_init()
 
     prompt = yield_summarise(group=group)
     last_error = None
