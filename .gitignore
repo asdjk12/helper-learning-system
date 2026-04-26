@@ -1,1 +1,6 @@
 RAG/demo_file/
+.env
+__pycache__
+data
+demo_file
+temp_dir

@@ -155,4 +155,15 @@ class ChromaVectorStore:
         )
 
     def delete_block(self, block_id):
-        self.collection.delete(ids=[block_id])
+        self.collection.delete(ids=block_id)
+
+    def get_all_blocks(self):
+        # 一键获取 DB 全部内容
+        return self.collection.get()
+
+    def remove_all(self):
+        all_blocks = self.collection.get()
+        ids = all_blocks.get("ids", [])
+
+        if ids:
+            self.delete_block(ids)

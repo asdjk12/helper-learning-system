@@ -1,0 +1,3 @@
+chromadb
+PyPDF2
+pypdf
