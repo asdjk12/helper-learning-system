@@ -1,3 +1,6 @@
 chromadb
+openai
 PyPDF2
 pypdf
+python-dotenv
+requests

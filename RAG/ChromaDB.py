@@ -1,117 +1,64 @@
 from __future__ import annotations
 
+import gc
+import shutil
+import time
 from pathlib import Path
-from typing import Any
 
 import chromadb
 
+
 class ChromaVectorStore:
     def __init__(
-            self,
-            persist_dir: str = "data/chroma",   # ChromaDB 数据保存在哪个文件夹里?
-            collection_name: str = "course_materials",  # 数据库里的“表名”。
-            ) -> None:
-        
-        self.persist_dir = Path(persist_dir)
+        self,
+        persist_dir: str | Path | None = None,
+        collection_name: str = "course_materials",
+    ) -> None:
+        self.persist_dir = Path(persist_dir) if persist_dir else self.default_persist_dir()
+        self.persist_dir = self.persist_dir.resolve()
+        self.collection_name = collection_name
         self.persist_dir.mkdir(parents=True, exist_ok=True)
-        self.client = chromadb.PersistentClient(path=str(self.persist_dir)) # 初始化客户端
+        self.client = chromadb.PersistentClient(path=str(self.persist_dir))
         self.collection = self.client.get_or_create_collection(
-            name=collection_name,
+            name=self.collection_name,
             metadata={"description": "Course materials for RAG"},
         )
-    
-    def add(self, document_id:str,
-                  blocks: list[dict],):
-        """
-        Example of sub-block:
-            {
-            "block_id": "week1_supervised_learning",
-            "title": "Supervised Learning",
-            "summary": "This block explains supervised learning, where a model learns from labelled examples to predict outputs for new inputs.",
-            "key_points": [
-                "Supervised learning uses input-output pairs.",
-                "The goal is to learn a mapping from inputs to outputs.",
-                "Common tasks include classification and regression."
-            ],
-            "formulas": [
-                {
-                "name": "Mean Squared Error",
-                "expression": "MSE = (1/n) * sum((y_i - y_hat_i)^2)",
-                "explanation": "Measures the average squared difference between actual and predicted values."
-                }
-            ],
-            "rules": [
-                "Use classification when the output is a category.",
-                "Use regression when the output is a continuous value."
-            ],
-            "methods": [
-                {
-                "name": "Train-test split",
-                "steps": [
-                    "Split the dataset into training and testing sets.",
-                    "Train the model on the training set.",
-                    "Evaluate performance on the testing set."
-                ]
-                }
-            ],
-            "examples": [
-                {
-                "question": "Predict whether an email is spam or not.",
-                "answer": "This is a classification problem because the output is a category."
-                }
-            ],
-            "source_pages": "3-6",
-            "document_id": "week1_slides",
-            "filename": "week1.pdf"
-            }
 
-            summary    -> 帮助快速理解这一块讲什么?
-            key_points -> 帮助抓重点?
-            formulas   -> 回答计算题、数学推导题
-            rules      -> 回答判断题、选择题、适用场景题?
-            methods    -> 回答“怎么做”的步骤题?
-            examples   -> 帮助 Tutor Agent 举例解释
-        """
+    @staticmethod
+    def default_persist_dir() -> Path:
+        return Path(__file__).resolve().parent / "data" / "chroma"
 
-        # 添加内容至数据库
+    def add(self, document_id: str, blocks: list[dict]) -> None:
         ids = []
         documents = []
         metadatas = []
 
-        for index,content in enumerate(blocks):
-            # 获取一个block内的更小sub-block ID
+        for index, content in enumerate(blocks):
             content_id = content.get("block_id", f"{document_id}:block:{index}")
 
-            ids.append(content_id)  
-
-            document_text = self._build_document_text(content)      # 片段evidence
-            documents.append(document_text)     # 追踪原文
-
-            # 
-            metadatas.append({
-                "document_id": document_id,
-                "block_id": content_id,
-                "filename": content.get("filename", ""),
-                "title": content.get("title", ""),
-                "source_pages": content.get("source_pages", ""),
-                "block_type": content.get("block_type", "summary"),
-            })
+            ids.append(content_id)
+            documents.append(self._build_document_text(content))
+            metadatas.append(
+                {
+                    "document_id": document_id,
+                    "block_id": content_id,
+                    "filename": content.get("filename", ""),
+                    "title": content.get("title", ""),
+                    "source_pages": content.get("source_pages", ""),
+                    "block_type": content.get("block_type", "summary"),
+                }
+            )
 
         self.collection.upsert(
             ids=ids,
             documents=documents,
             metadatas=metadatas,
         )
-    
-    def _build_document_text(self, block):
-        # 获取block信息 一起存进DB 做提取?
-        key_points = block.get("key_points", [])
-        concepts = block.get("concepts", [])
+
+    def _build_document_text(self, block: dict) -> str:
         formulas = block.get("formulas", [])
-        rules = block.get("rules", [])
         methods = block.get("methods", [])
         examples = block.get("examples", [])
-
 
         formulas_text = "\n".join(
             f"- {item.get('name', '')}: {item.get('expression', '')} {item.get('explanation', '')}"
@@ -131,24 +78,24 @@ class ChromaVectorStore:
             for item in examples
         )
 
-        return "\n\n".join([
-            f"Title: {block.get('title', '')}",
-            f"Summary:\n{block.get('summary', '')}",
-            "Key points:\n" + "\n".join(f"- {point}" for point in key_points),
-            "Concepts:\n" + ", ".join(concepts),
-            "Formulas:\n" + formulas_text,
-            "Rules:\n" + "\n".join(f"- {rule}" for rule in rules),
-            "Methods:\n" + methods_text,
-            "Examples:\n" + examples_text,
-        ])
+        return "\n\n".join(
+            [
+                f"Title: {block.get('title', '')}",
+                f"Type: {block.get('block_type', '')}",
+                f"Summary:\n{block.get('summary', '')}",
+                "Concepts:\n" + ", ".join(block.get("concepts", [])),
+                "Key points:\n" + "\n".join(f"- {point}" for point in block.get("key_points", [])),
+                "Evidence:\n" + "\n".join(f"- {item}" for item in block.get("evidence", [])),
+                "Formulas:\n" + formulas_text,
+                "Methods:\n" + methods_text,
+                "Examples:\n" + examples_text,
+            ]
+        )
 
     def get_block(self, block_id):
-        # 通过ID 获取blcok 信息
         return self.collection.get(ids=[block_id])
 
     def search(self, query, n_results=5):
-        # query 
-
         return self.collection.query(
             query_texts=[query],
             n_results=n_results,
@@ -158,12 +105,61 @@ class ChromaVectorStore:
         self.collection.delete(ids=block_id)
 
     def get_all_blocks(self):
-        # 一键获取DB 全部内容
         return self.collection.get()
 
     def remove_all(self):
-        all_blocks = self.collection.get()
-        ids = all_blocks.get("ids", [])
+        """
+        Remove all Chroma content for this store and delete the persisted files.
 
-        if ids:
-            self.delete_block(ids)
+        After this call the current ChromaVectorStore instance should be discarded.
+        Create a new ChromaVectorStore() before adding/searching again.
+        """
+        persist_dir = self.persist_dir
+
+        if self.collection is not None:
+            all_blocks = self.collection.get()
+            ids = all_blocks.get("ids", [])
+
+            if ids:
+                self.collection.delete(ids=ids)
+
+        try:
+            self.client.delete_collection(name=self.collection_name)
+        except Exception:
+            raise ValueError("delete_collection error")
+
+        self.collection = None
+        self.client = None
+        try:
+            from chromadb.api.client import SharedSystemClient
+
+            SharedSystemClient.clear_system_cache()
+        except Exception:
+            raise ValueError("SharedSystemClient error")
+
+        gc.collect()
+
+        persist_dir = persist_dir.resolve()
+        if not persist_dir.exists():
+            return
+
+        if persist_dir.name.lower() != "chroma":
+            raise ValueError(
+                "Refusing to delete Chroma persist directory because the final "
+                f"path segment is not 'chroma': {persist_dir}"
+            )
+
+        last_error = None
+        for _ in range(5):
+            try:
+                shutil.rmtree(persist_dir)
+                return
+            except PermissionError as error:
+                last_error = error
+                time.sleep(0.2)
+
+        raise RuntimeError(
+            "Failed to delete Chroma persist directory. "
+            "A Python process may still be holding the database files open: "
+            f"{persist_dir}"
+        ) from last_error

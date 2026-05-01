@@ -11,30 +11,16 @@ Return ONLY valid JSON in this exact shape:
     {{
       "block_id": "short_stable_id",
       "title": "topic title",
-      "summary": "clear summary",
+      "block_type": "concept | method | formula | example | comparison | history | summary",
+      "summary": "clear grounded summary",
       "key_points": ["point 1", "point 2"],
-      "formulas": [
-        {{
-          "name": "formula name",
-          "expression": "formula expression",
-          "explanation": "what it means"
-        }}
-      ],
-      "rules": ["rule 1", "rule 2"],
-      "methods": [
-        {{
-          "name": "method name",
-          "steps": ["step 1", "step 2"]
-        }}
-      ],
-      "examples": [
-        {{
-          "question": "example question",
-          "answer": "example answer"
-        }}
-      ],
-      "source_pages": "{group['source_pages']}",
-      "filename": "{group['filename']}"
+      "concepts": ["concept 1", "concept 2"],
+      "evidence": ["source-grounded fact 1"],
+      "formulas": [],
+      "methods": [],
+      "examples": [],
+      "source_pages": "1-3",
+      "filename": "file.pdf"
     }}
   ]
 }}
@@ -43,20 +29,16 @@ Strict JSON rules:
 - Return ONLY JSON.
 - Do not wrap in markdown.
 - Do not explain anything before or after the JSON.
-- Do not use Python dict syntax.
 - Use double quotes for all JSON keys and string values.
-- Do not put raw newline characters inside JSON strings. Use spaces instead.
-- Escape any required newline inside strings as \\n.
-- Do not use trailing commas.
 - The top-level key must be exactly "blocks".
 - "blocks" must be a non-empty array.
-- Every block must include: block_id, title, summary, key_points, formulas, rules, methods, examples, source_pages, filename.
-- key_points, formulas, rules, methods, and examples must always be arrays, even if empty.
-- formulas must be an array of objects with name, expression, and explanation.
-- methods must be an array of objects with name and steps.
-- examples must be an array of objects with question and answer.
-- If information is missing, use an empty string or empty array.
-- Rewrite corrupted formula symbols into simple ASCII text when possible.
+- Every block must include: block_id, title, block_type, summary, key_points, concepts, evidence, formulas, methods, examples, source_pages, filename.
+- block_type must be one of: concept, method, formula, example, comparison, history, summary.
+- Do not infer facts that are not supported by the PDF content.
+- evidence must contain short source-grounded facts from the PDF pages.
+- Optional arrays may be empty if not present in the PDF.
+- Do not force prerequisites, limitations, related concepts, or timeline events unless explicitly stated.
+
 
 Formula and symbol rules:
 - Rewrite formulas in simple ASCII/plain text whenever possible.
@@ -82,8 +64,11 @@ Fix the content below into ONLY valid JSON with exactly this shape:
     {{
       "block_id": "short_stable_id",
       "title": "topic title",
-      "summary": "clear summary",
+      "block_type": "concept | method | formula | example | comparison | history | summary",
+      "summary": "clear grounded summary",
       "key_points": ["point 1"],
+      "concepts": ["concept 1"],
+      "evidence": ["source-grounded fact 1"],
       "formulas": [
         {{
           "name": "formula name",
@@ -119,6 +104,9 @@ Rules:
 - Escape all newlines inside JSON strings as \\n.
 - If a field is unknown, use an empty string or empty list.
 - The value of "blocks" must be a JSON array, not a string.
+- Every block must include block_id, title, block_type, summary, key_points, concepts, evidence, formulas, methods, and examples.
+- block_type must be one of: concept, method, formula, example, comparison, history, summary.
+- Do not add unsupported facts just to fill optional fields.
 
 Original parse error:
 {error}

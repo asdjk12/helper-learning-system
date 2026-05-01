@@ -1,27 +1,20 @@
+import hashlib
 import json
-import os
 from pathlib import Path
+import shutil
 from urllib.parse import unquote, urlparse
+
 import requests
 
 try:
     from ..prompt import _repair_llm_json, yield_summarise
-except ImportError:
-    from prompt import _repair_llm_json, yield_summarise
-
-try:
     from ..llm import model_init
-except ImportError:
-    from llm import model_init
-
-try:
     from .ChromaDB import ChromaVectorStore
-except ImportError:
-    from ChromaDB import ChromaVectorStore
-
-try:
     from pypdf import PdfReader
 except ImportError:
+    from prompt import _repair_llm_json, yield_summarise
+    from llm import model_init
+    from ChromaDB import ChromaVectorStore
     from PyPDF2 import PdfReader
 
 
@@ -47,6 +40,7 @@ def _parse_llm_json(content):
                 "LLM response is not valid JSON. "
                 f"Preview: {preview}"
             ) from error
+
 
 def _validate_blocks_schema(data, group):
     source_pages = group.get("source_pages", "<unknown_pages>")
@@ -78,8 +72,30 @@ def _validate_blocks_schema(data, group):
             "'blocks' is empty"
         )
 
-    required_string_fields = ["title", "summary"]
-    list_fields = ["key_points", "formulas", "rules", "methods", "examples"]
+    required_string_fields = ["block_id", "title", "block_type", "summary"]
+    
+    # LLM 总结字段
+    required_list_fields = [
+        "concepts",
+        "key_points",
+        "evidence",
+    ]
+    optional_list_fields = [
+        "formulas",
+        "methods",
+        "examples",
+    ]
+
+    # pdf 原文返回字段
+    allowed_block_types = {
+        "concept",
+        "method",
+        "formula",
+        "example",
+        "comparison",
+        "history",
+        "summary",
+    }
 
     for index, block in enumerate(blocks):
         if not isinstance(block, dict):
@@ -95,7 +111,18 @@ def _validate_blocks_schema(data, group):
                     f"block {index} missing non-empty string field '{field}'"
                 )
 
-        for field in list_fields:
+        block_type = block.get("block_type", "").strip()
+        if block_type not in allowed_block_types:
+            block["block_type"] = "summary"
+
+        for field in required_list_fields:
+            if not isinstance(block.get(field), list) or not block[field]:
+                raise ValueError(
+                    f"Invalid LLM schema for pages {source_pages}: "
+                    f"block {index} field '{field}' must be a non-empty list"
+                )
+
+        for field in optional_list_fields:
             if field not in block:
                 block[field] = []
             elif not isinstance(block[field], list):
@@ -109,13 +136,12 @@ def _validate_blocks_schema(data, group):
 
 
 def download_pdf_to_temp(file_url, temp_dir):
-    """
-    下载pdf至临时文件?    """
+    # 临时文件下载
     if not file_url:
-        raise ValueError("未收到file_url")
+        raise ValueError("file_url is required")
 
     file_url = str(file_url)
-    parsed_url = urlparse(file_url)         # 拆解url
+    parsed_url = urlparse(file_url)
     temp_dir = Path(temp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
 
@@ -123,7 +149,6 @@ def download_pdf_to_temp(file_url, temp_dir):
         filename = Path(unquote(parsed_url.path)).name or "uploaded.pdf"
         temp_pdf_path = temp_dir / filename
 
-        # 读取url并查看状态?        
         response = requests.get(file_url, stream=True, timeout=30)
         response.raise_for_status()
 
@@ -133,6 +158,50 @@ def download_pdf_to_temp(file_url, temp_dir):
                     target.write(chunk)
 
         return str(temp_pdf_path)
+
+    source_path = Path(file_url).expanduser()
+    if source_path.exists():
+        temp_pdf_path = temp_dir / source_path.name
+        shutil.copy2(source_path, temp_pdf_path)
+        return str(temp_pdf_path)
+
+    raise ValueError(f"Unsupported PDF source: {file_url}")
+
+
+def calculate_file_sha256(file_path):
+    # sha256计算，查重需要
+    digest = hashlib.sha256()
+    with Path(file_path).open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def persist_pdf_file(temp_pdf_path, document_id, storage_dir="storage/pdfs"):
+    """
+    Keep the raw PDF on disk and return lightweight metadata for databases.
+    The PDF bytes should not be inserted into Chroma or future SQL tables.
+    """
+    pdf_path = Path(temp_pdf_path)
+    if not pdf_path.exists():
+        raise FileNotFoundError(f"PDF file not found: {pdf_path}")
+
+    storage_path = Path(storage_dir)
+    storage_path.mkdir(parents=True, exist_ok=True)
+
+    sha256 = calculate_file_sha256(pdf_path)
+    target_path = storage_path / f"{sha256}.pdf"
+
+    if not target_path.exists():
+        shutil.copy2(pdf_path, target_path)
+
+    return {
+        "document_id": document_id,
+        "filename": pdf_path.name,
+        "file_path": str(target_path),
+        "sha256": sha256,
+        "file_size": pdf_path.stat().st_size,
+    }
 
 
 def read_pdf_pages(temp_pdf_path):
@@ -163,10 +232,13 @@ def read_pdf_pages(temp_pdf_path):
 
 def group_pages(pages, max_tokens=1800):
     """
-    在将页面发送给LLM之前，请先将它们分组。
-    这样可以保持源页码清晰，避免出现一大堆提示信息。    """
+    Group neighboring PDF pages before semantic block extraction.
+
+    This is not the final embedding chunk. It is only a bounded input window
+    for the LLM, which later extracts one or more semantic knowledge blocks.
+    """
     if max_tokens <= 0:
-        raise ValueError("group_size须为正整数")
+        raise ValueError("max_tokens must be greater than 0")
 
     page_group = []
     current_tokens = 0
@@ -178,7 +250,6 @@ def group_pages(pages, max_tokens=1800):
 
         page_tokens = max(1, len(text) // 4)
 
-        # token 验证限制防止过大
         if page_group and current_tokens + page_tokens > max_tokens:
             yield {
                 "filename": page_group[0]["filename"],
@@ -212,15 +283,13 @@ def summarize_group_with_llm(group, model=None, max_attempts=3):
     Retry generation up to max_attempts times, with one repair attempt
     inside each generation attempt.
     """
-
-    client,model = model_init()
-
+    client, default_model = model_init()
+    model = model or default_model
     prompt = yield_summarise(group=group)
     last_error = None
 
-    # re-generation 机制
     for attempt in range(1, max_attempts + 1):
-        print(f"LLM attempt {attempt}/{max_attempts} for pages {group['source_pages']}")    # 追踪
+        print(f"LLM attempt {attempt}/{max_attempts} for pages {group['source_pages']}")
         raw_content = ""
 
         try:
@@ -280,10 +349,9 @@ def summarize_group_with_llm(group, model=None, max_attempts=3):
 
 
 def store_blocks(document_id, blocks, store=None):
-    # 确认只在block有效时入库
     if not blocks:
         raise ValueError(f"No blocks to store for document_id={document_id}")
 
-    store = store or ChromaVectorStore()    # 初始化DB 
+    store = store or ChromaVectorStore()
     store.add(document_id=document_id, blocks=blocks)
     return len(blocks)
